@@ -1,0 +1,22 @@
+# Liga o Gateway API no Traefik que já vem com o k3s.
+#   kubectl apply -f infra/k3s/traefik-gateway.yaml
+# O helm-controller do k3s reinstala o Traefik com estes valores e cria o GatewayClass
+# "traefik" e o Gateway "traefik-gateway" em kube-system, escutando na porta 80 do nó
+# (entryPoint "web", 8000 dentro do pod).
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: traefik
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    providers:
+      kubernetesGateway:
+        enabled: true
+    gateway:
+      listeners:
+        web:
+          # Por padrão o Gateway só aceita rotas do próprio namespace (kube-system);
+          # o HTTPRoute do app mora em outro.
+          namespacePolicy:
+            from: All

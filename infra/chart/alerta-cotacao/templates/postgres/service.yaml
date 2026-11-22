@@ -1,0 +1,33 @@
+{{- if .Values.postgres.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "alerta.fullname" . }}-postgres
+  labels:
+    {{- include "alerta.componentLabels" (list . "postgres") | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "alerta.componentSelector" (list . "postgres") | nindent 4 }}
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+---
+# Headless: identidade estável do StatefulSet (postgres-0.<este serviço>)
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "alerta.fullname" . }}-postgres-hl
+  labels:
+    {{- include "alerta.componentLabels" (list . "postgres") | nindent 4 }}
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    {{- include "alerta.componentSelector" (list . "postgres") | nindent 4 }}
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+{{- end }}

@@ -1,0 +1,99 @@
+# Stack local (fase 1): o mesmo desenho do cluster, em contêineres na sua máquina.
+#
+#   cp .env.example .env        # e troque os tokens
+#   docker compose up --build   # abre em http://localhost:8080
+#
+# Para ver um alerta disparar sem esperar o mercado: make demo (mercado falso).
+
+name: alerta-cotacao
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: alerta
+      POSTGRES_USER: alerta
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-alerta}
+    volumes:
+      # A partir do 18, a imagem oficial guarda os dados em /var/lib/postgresql/18/docker:
+      # o volume vai em /var/lib/postgresql (montar em .../data, como antes, dá erro).
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U alerta -d alerta"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build: services/api
+    image: alerta-cotacao/api:local
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/alerta
+      SPRING_DATASOURCE_USERNAME: alerta
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-alerta}
+      APP_TOKEN: ${APP_TOKEN:?defina APP_TOKEN no .env (veja .env.example)}
+      CHECKER_TOKEN: ${CHECKER_TOKEN:?defina CHECKER_TOKEN no .env (veja .env.example)}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    read_only: true
+    tmpfs: [/tmp]
+    healthcheck:
+      # A imagem JRE não tem curl/wget: um GET na porta do actuator com o /dev/tcp do bash.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8081 && printf 'GET /actuator/health/readiness HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q UP <&3"]
+      interval: 10s
+      timeout: 5s
+      start_period: 60s
+      retries: 6
+
+  checker:
+    build: services/checker
+    image: alerta-cotacao/checker:local
+    environment:
+      API_URL: http://api:8080
+      CHECKER_TOKEN: ${CHECKER_TOKEN:?defina CHECKER_TOKEN no .env (veja .env.example)}
+      NTFY_TOPIC: ${NTFY_TOPIC:-}
+      NTFY_TOKEN: ${NTFY_TOKEN:-}
+      NOTIFY_DRY_RUN: ${NOTIFY_DRY_RUN:-true}
+      BRAPI_TOKEN: ${BRAPI_TOKEN:-}
+      AWESOMEAPI_TOKEN: ${AWESOMEAPI_TOKEN:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      CHECK_INTERVAL_SECONDS: ${CHECK_INTERVAL_SECONDS:-120}
+      MARKET_HOURS: ${MARKET_HOURS:-09:00-18:30}
+    depends_on:
+      api:
+        condition: service_healthy
+    read_only: true
+    tmpfs: [/tmp]
+    healthcheck:
+      test: ["CMD", "python", "-m", "alerta_checker.health", "--max-age", "600"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+
+  web:
+    build: apps/web
+    image: alerta-cotacao/web:local
+    read_only: true
+    tmpfs: [/tmp]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 3s
+
+  # Faz aqui o papel do Gateway do cluster: / vai para o web e /api para a API.
+  gateway:
+    image: nginx/nginx-unprivileged:1.30-alpine
+    volumes:
+      - ./infra/compose/gateway.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "${GATEWAY_PORT:-8080}:8080"
+    depends_on:
+      web:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+
+volumes:
+  pgdata:

@@ -1,0 +1,34 @@
+# Cluster local (k3d ou k3s numa VM), com o Traefik que já vem no k3s como Gateway.
+#   helm upgrade --install alerta infra/chart/alerta-cotacao -n alerta --create-namespace -f infra/chart/alerta-cotacao/values-local.yaml
+# Passo a passo no README (seção Kubernetes).
+
+global:
+  imageRegistry: "" # imagens locais, importadas com "k3d image import"
+  imageTag: dev
+  imagePullPolicy: IfNotPresent
+
+web:
+  replicas: 1
+api:
+  replicas: 1
+  resources:
+    requests: { cpu: 50m, memory: 320Mi }
+    limits: { memory: 512Mi }
+
+checker:
+  # Enquanto os avisos de verdade saem pelo GitHub Actions (fase 1), o cluster de
+  # estudo não manda push: tudo aparece no log do checker. Mude para false para valer.
+  dryRun: true
+
+postgres:
+  storage: 1Gi
+
+gateway:
+  hostnames:
+    - alerta.localhost
+  parentRefs:
+    - name: traefik-gateway # criado pelo Traefik do k3s (infra/k3s/traefik-gateway.yaml)
+      namespace: kube-system
+
+networkPolicy:
+  enabled: true # o k3s aplica NetworkPolicy com o controlador embutido

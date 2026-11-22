@@ -1,0 +1,12 @@
+apiVersion: v2
+name: alerta-cotacao
+description: Alerta de Cotação (PWA, API Java, checker Python e PostgreSQL) com rota pelo Gateway API
+type: application
+version: 0.1.0
+# Tag padrão das três imagens; o CI sobrescreve com global.imageTag=sha-<commit>.
+appVersion: "0.1.0"
+kubeVersion: ">=1.29.0-0"
+keywords: [alertas, cotacao, gateway-api]
+maintainers:
+  - name: tamireszoliveira
+    url: https://github.com/tamireszoliveira

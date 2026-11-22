@@ -1,0 +1,27 @@
+# Sobreposição para desenvolvimento: troca AwesomeAPI e brapi por um mercado falso
+# com preços que você controla, e acelera o checker.
+#
+#   docker compose -f compose.yaml -f compose.mercado-falso.yaml up --build   (ou: make demo)
+#   curl -X PUT localhost:9000/precos/VALE3 -d 64.5                           (ou: make preco ATIVO=VALE3 VALOR=64.5)
+
+services:
+  mercado-falso:
+    build: services/checker
+    image: alerta-cotacao/checker:local
+    command: ["alerta_checker.fake_market", "--port", "9000"]
+    environment:
+      FAKE_PRICES: ${FAKE_PRICES:-USD-BRL=5.18,VALE3=70.10,PETR4=38.50}
+    ports:
+      - "127.0.0.1:9000:9000"
+    read_only: true
+
+  checker:
+    environment:
+      AWESOMEAPI_URL: http://mercado-falso:9000
+      BRAPI_URL: http://mercado-falso:9000
+      MARKET_HOURS: sempre
+      CHECK_INTERVAL_SECONDS: "15"
+      STOCK_MIN_INTERVAL_SECONDS: "0"
+    depends_on:
+      mercado-falso:
+        condition: service_started

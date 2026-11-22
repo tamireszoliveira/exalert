@@ -1,0 +1,17 @@
+Alerta de Cotação instalado como "{{ .Release.Name }}" em {{ .Release.Namespace }}.
+
+App: http{{ if and .Values.gateway.create .Values.gateway.tls.enabled }}s{{ end }}://{{ first .Values.gateway.hostnames }}/
+{{- if not .Values.secrets.existingSecret }}
+
+Token para colar no app (Ajustes):
+  kubectl -n {{ .Release.Namespace }} get secret {{ include "alerta.secretName" . }} -o jsonpath='{.data.APP_TOKEN}' | base64 -d; echo
+{{- end }}
+
+Acompanhar:
+  kubectl -n {{ .Release.Namespace }} get pods -l app.kubernetes.io/instance={{ .Release.Name }}
+  kubectl -n {{ .Release.Namespace }} logs deploy/{{ include "alerta.fullname" . }}-checker -f
+  kubectl -n {{ .Release.Namespace }} get httproute {{ include "alerta.fullname" . }} -o jsonpath='{.status.parents[*].conditions}'
+{{- if .Values.checker.dryRun }}
+
+Atenção: checker.dryRun=true, os pushes só aparecem no log do checker.
+{{- end }}

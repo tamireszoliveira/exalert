@@ -1,0 +1,23 @@
+# Um bloco [[alerta]] por condição. Cada alerta avisa UMA vez quando a condição
+# passa a valer e só volta a avisar depois que o preço se afastar do limite.
+#
+#   ativo   par de moedas ("USD-BRL", "EUR-BRL") -> câmbio comercial, AwesomeAPI
+#           ticker da B3 ("VALE3", "PETR4")       -> brapi
+#   abaixo  avisa quando o preço ficar menor que este valor
+#   acima   avisa quando o preço ficar maior que este valor
+#   nome    (opcional) rótulo que aparece na notificação
+#
+# Pode usar abaixo e acima no mesmo bloco para vigiar uma faixa.
+
+[[alerta]]
+ativo = "USD-BRL"
+nome = "Dólar"
+abaixo = 5.00
+
+[[alerta]]
+ativo = "VALE3"
+abaixo = 65.00
+
+# [config]
+# rearme_pct = 0.5       # quanto (%) o preço precisa voltar além do limite para o alerta rearmar
+# falha_aviso_min = 60   # minutos sem conseguir cotação até avisar que a fonte está falhando

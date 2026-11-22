@@ -1,0 +1,26 @@
+{{- if and .Values.networkPolicy.enabled .Values.networkPolicy.ciliumGateway }}
+# Cilium Gateway API: o Envoy do Cilium chega aos pods com a identidade reservada
+# "ingress", que uma NetworkPolicy comum não consegue selecionar. Esta regra abre
+# web e api para ela (a NetworkPolicy padrão continua valendo para o resto).
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ include "alerta.fullname" . }}-from-cilium-gateway
+  labels:
+    {{- include "alerta.labels" . | nindent 4 }}
+spec:
+  endpointSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/instance
+        operator: In
+        values: [{{ .Release.Name | quote }}]
+      - key: app.kubernetes.io/component
+        operator: In
+        values: [web, api]
+  ingress:
+    - fromEntities: [ingress]
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+{{- end }}

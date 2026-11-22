@@ -1,0 +1,47 @@
+# Configuração da API. Tudo aqui pode ser sobrescrito por variável de ambiente
+# (ex.: SPRING_DATASOURCE_URL), que é como o compose e o chart passam os valores.
+
+spring:
+  application:
+    name: alerta-api
+  datasource:
+    url: jdbc:postgresql://localhost:5432/alerta
+    username: alerta
+    password: alerta
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: none # o esquema é do Flyway (src/main/resources/db/migration)
+  threads:
+    virtual:
+      enabled: true
+  lifecycle:
+    timeout-per-shutdown-phase: 20s
+
+server:
+  port: 8080
+  shutdown: graceful
+
+# Actuator numa porta separada: as probes do Kubernetes usam 8081 e o Gateway só
+# conhece a 8080, então /actuator nunca fica exposto para fora do cluster.
+management:
+  server:
+    port: 8081
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      group:
+        readiness:
+          include: readinessState,db
+
+alerta:
+  app-token: ${APP_TOKEN:}
+  checker-token: ${CHECKER_TOKEN:}
+  quote-retention: 30d
+  event-retention: 180d
+  pending-window: 24h

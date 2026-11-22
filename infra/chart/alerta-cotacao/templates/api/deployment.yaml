@@ -1,0 +1,79 @@
+{{- $secret := include "alerta.secretName" . }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "alerta.fullname" . }}-api
+  labels:
+    {{- include "alerta.componentLabels" (list . "api") | nindent 4 }}
+spec:
+  replicas: {{ .Values.api.replicas }}
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      {{- include "alerta.componentSelector" (list . "api") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "alerta.componentLabels" (list . "api") | nindent 8 }}
+      {{- with include "alerta.secretChecksum" . }}
+      annotations:
+        {{- . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 40 # 5 s de preStop + até 20 s de shutdown gracioso do Spring
+      securityContext:
+        {{- include "alerta.podSecurity" 10001 | nindent 8 }}
+      containers:
+        - name: api
+          image: {{ include "alerta.image" (list . .Values.api.image) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: management # actuator: só as probes usam; o Service não expõe
+              containerPort: 8081
+          env:
+            - name: SPRING_DATASOURCE_URL
+              value: {{ include "alerta.jdbcUrl" . | quote }}
+            - name: SPRING_DATASOURCE_USERNAME
+              value: {{ ternary .Values.postgres.username .Values.externalDatabase.username .Values.postgres.enabled | quote }}
+            - name: SPRING_DATASOURCE_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: {{ $secret }}, key: POSTGRES_PASSWORD }
+            - name: APP_TOKEN
+              valueFrom:
+                secretKeyRef: { name: {{ $secret }}, key: APP_TOKEN }
+            - name: CHECKER_TOKEN
+              valueFrom:
+                secretKeyRef: { name: {{ $secret }}, key: CHECKER_TOKEN }
+            - name: JAVA_TOOL_OPTIONS
+              value: {{ .Values.api.javaToolOptions | quote }}
+          startupProbe: # a JVM demora a subir; até 150 s antes da liveness começar a valer
+            httpGet: { path: /actuator/health/liveness, port: management }
+            periodSeconds: 5
+            failureThreshold: 30
+          livenessProbe:
+            httpGet: { path: /actuator/health/liveness, port: management }
+            periodSeconds: 20
+          readinessProbe: # inclui o banco: sem Postgres, o pod sai da rota
+            httpGet: { path: /actuator/health/readiness, port: management }
+            periodSeconds: 10
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "5"]
+          resources:
+            {{- toYaml .Values.api.resources | nindent 12 }}
+          securityContext:
+            {{- include "alerta.containerSecurity" . | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp # o Tomcat embutido grava arquivos temporários aqui
+      volumes:
+        - name: tmp
+          emptyDir: {}

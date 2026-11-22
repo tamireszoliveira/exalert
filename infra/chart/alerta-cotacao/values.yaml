@@ -1,0 +1,122 @@
+# Valores padrão. values-local.yaml (k3d/k3s) e values-prod.yaml só sobrescrevem o que muda.
+
+global:
+  # As três imagens saem do mesmo commit, com a mesma tag (ver .github/workflows/release.yml).
+  imageRegistry: ghcr.io/tamireszoliveira
+  imageTag: "" # vazio = appVersion do Chart.yaml
+  imagePullPolicy: IfNotPresent
+  imagePullSecrets: [] # pacote privado no GHCR: [{name: ghcr}]
+
+web:
+  replicas: 2
+  image:
+    repository: alerta-cotacao-web
+    tag: "" # vazio = global.imageTag
+  resources:
+    requests: { cpu: 10m, memory: 16Mi }
+    limits: { memory: 64Mi }
+
+api:
+  replicas: 2
+  image:
+    repository: alerta-cotacao-api
+    tag: ""
+  javaToolOptions: "-XX:MaxRAMPercentage=75 -XX:+ExitOnOutOfMemoryError"
+  resources:
+    requests: { cpu: 100m, memory: 384Mi }
+    limits: { memory: 512Mi }
+
+# O checker roda SEMPRE com 1 réplica (duas mandariam cada push em dobro); por isso
+# não há "replicas" aqui, e a estratégia é Recreate.
+checker:
+  enabled: true
+  image:
+    repository: alerta-cotacao-checker
+    tag: ""
+  intervalSeconds: 120
+  stockMinIntervalSeconds: 300 # brapi grátis: cota mensal e ~30 min de atraso
+  marketHours: "09:00-18:30" # seg-sex, Brasília; "sempre" para 24 h
+  failNoticeMinutes: 60
+  dryRun: false # true = push só no log
+  resources:
+    requests: { cpu: 10m, memory: 32Mi }
+    limits: { memory: 96Mi }
+
+postgres:
+  enabled: true # false = banco gerenciado (preencha externalDatabase)
+  image: postgres:18-alpine
+  database: alerta
+  username: alerta
+  storage: 2Gi
+  storageClassName: "" # vazio = default do cluster (k3s: local-path)
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { memory: 512Mi }
+
+externalDatabase:
+  jdbcUrl: "" # jdbc:postgresql://meu-banco:5432/alerta
+  username: alerta
+  # a senha vai no Secret, na chave POSTGRES_PASSWORD
+
+# Segredos. Recomendado: crie o Secret fora do chart (Sealed Secrets, External Secrets,
+# kubectl create secret) e informe o nome em existingSecret, com estas chaves:
+#   APP_TOKEN, CHECKER_TOKEN, POSTGRES_PASSWORD e, opcionais, NTFY_TOPIC, NTFY_TOKEN,
+#   BRAPI_TOKEN, AWESOMEAPI_TOKEN, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+# Sem existingSecret, o chart cria um: tokens e senha vazios são gerados uma vez e
+# mantidos nos upgrades (lookup). Isso não funciona com Argo CD/Flux (eles não fazem lookup).
+secrets:
+  existingSecret: ""
+  appToken: ""
+  checkerToken: ""
+  postgresPassword: ""
+  ntfyTopic: ""
+  ntfyToken: ""
+  brapiToken: ""
+  awesomeapiToken: ""
+  telegramBotToken: ""
+  telegramChatId: ""
+
+# Rota HTTP pelo Gateway API: /api -> api, / -> web.
+gateway:
+  hostnames:
+    - alerta.localhost
+  # Gateway compartilhado, da plataforma (o caso comum). No k3s, o Traefik cria
+  # "traefik-gateway" em kube-system quando o provider kubernetesGateway está ligado.
+  parentRefs:
+    - name: traefik-gateway
+      namespace: kube-system
+  # Ou um Gateway só deste app (create: true), por exemplo com o Cilium:
+  create: false
+  className: cilium
+  httpPort: 80 # Traefik: use as portas dos entryPoints (8000/8443)
+  httpsPort: 443
+  tls:
+    enabled: false
+    secretName: alerta-tls
+    clusterIssuer: "" # ex.: letsencrypt; o cert-manager emite o certificado do listener HTTPS
+
+networkPolicy:
+  enabled: true
+  # De onde chega o tráfego do Gateway até web e api. Depende do controller:
+  # Traefik do k3s roda em kube-system; Envoy Gateway em envoy-gateway-system.
+  gatewayFrom:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+  # Cilium Gateway: o Envoy embutido usa a identidade reservada "ingress", que uma
+  # NetworkPolicy comum não alcança. Liga uma CiliumNetworkPolicy com fromEntities: ingress.
+  ciliumGateway: false
+  dns:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+  # Saída do checker para AwesomeAPI, brapi, ntfy e Telegram (HTTPS). As faixas privadas
+  # ficam de fora: o checker não tem o que fazer na rede interna além da API.
+  checkerEgress:
+    cidr: 0.0.0.0/0
+    except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 100.64.0.0/10]
+  # Banco externo (postgres.enabled: false): para onde a API pode abrir 5432.
+  externalDatabaseCidr: ""

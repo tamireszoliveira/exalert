@@ -1,0 +1,39 @@
+{{- if .Values.gateway.create }}
+{{- $gw := .Values.gateway }}
+# Gateway só deste app. Em cluster compartilhado o normal é a plataforma ter um
+# Gateway e cada app trazer só o HTTPRoute (gateway.create=false).
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: {{ include "alerta.fullname" . }}
+  labels:
+    {{- include "alerta.labels" . | nindent 4 }}
+  {{- if and $gw.tls.enabled $gw.tls.clusterIssuer }}
+  annotations:
+    # cert-manager (com suporte a Gateway API ligado) emite o certificado do listener HTTPS
+    cert-manager.io/cluster-issuer: {{ $gw.tls.clusterIssuer }}
+  {{- end }}
+spec:
+  gatewayClassName: {{ required "gateway.className é obrigatório com gateway.create=true" $gw.className }}
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: {{ $gw.httpPort }}
+      hostname: {{ first $gw.hostnames | quote }}
+      allowedRoutes:
+        namespaces:
+          from: Same
+    {{- if $gw.tls.enabled }}
+    - name: https
+      protocol: HTTPS
+      port: {{ $gw.httpsPort }}
+      hostname: {{ first $gw.hostnames | quote }}
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: {{ $gw.tls.secretName }}
+      allowedRoutes:
+        namespaces:
+          from: Same
+    {{- end }}
+{{- end }}

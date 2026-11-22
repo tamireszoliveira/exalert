@@ -1,0 +1,77 @@
+{{- if .Values.checker.enabled }}
+{{- $secret := include "alerta.secretName" . }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "alerta.fullname" . }}-checker
+  labels:
+    {{- include "alerta.componentLabels" (list . "checker") | nindent 4 }}
+spec:
+  # Fixo em 1: duas réplicas avaliariam os mesmos alertas e mandariam cada push em dobro.
+  replicas: 1
+  strategy:
+    type: Recreate # nunca dois checkers ao mesmo tempo, nem durante o rollout
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      {{- include "alerta.componentSelector" (list . "checker") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "alerta.componentLabels" (list . "checker") | nindent 8 }}
+      {{- with include "alerta.secretChecksum" . }}
+      annotations:
+        {{- . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      automountServiceAccountToken: false
+      securityContext:
+        {{- include "alerta.podSecurity" 10001 | nindent 8 }}
+      containers:
+        - name: checker
+          image: {{ include "alerta.image" (list . .Values.checker.image) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          env:
+            - name: API_URL
+              value: "http://{{ include "alerta.fullname" . }}-api:8080"
+            - name: CHECK_INTERVAL_SECONDS
+              value: {{ .Values.checker.intervalSeconds | quote }}
+            - name: STOCK_MIN_INTERVAL_SECONDS
+              value: {{ .Values.checker.stockMinIntervalSeconds | quote }}
+            - name: MARKET_HOURS
+              value: {{ .Values.checker.marketHours | quote }}
+            - name: FAIL_NOTICE_MINUTES
+              value: {{ .Values.checker.failNoticeMinutes | quote }}
+            - name: NOTIFY_DRY_RUN
+              value: {{ .Values.checker.dryRun | quote }}
+            - name: HEARTBEAT_FILE
+              value: /tmp/heartbeat
+            {{- range list "CHECKER_TOKEN" "NTFY_TOPIC" "NTFY_TOKEN" "BRAPI_TOKEN" "AWESOMEAPI_TOKEN" "TELEGRAM_BOT_TOKEN" "TELEGRAM_CHAT_ID" }}
+            - name: {{ . }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secret }}
+                  key: {{ . }}
+                  optional: {{ ne . "CHECKER_TOKEN" }}
+            {{- end }}
+          livenessProbe:
+            # o laço grava o heartbeat a cada ciclo; parado há 10 min = travado
+            exec:
+              command: ["python", "-m", "alerta_checker.health", "--max-age", {{ max 600 (mul (int .Values.checker.intervalSeconds) 3) | quote }}]
+            initialDelaySeconds: 30
+            periodSeconds: 60
+          resources:
+            {{- toYaml .Values.checker.resources | nindent 12 }}
+          securityContext:
+            {{- include "alerta.containerSecurity" . | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+{{- end }}

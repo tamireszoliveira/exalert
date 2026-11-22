@@ -1,0 +1,32 @@
+# Exemplo de produção: domínio próprio, HTTPS e um Gateway só do app no Cilium.
+# Ajuste hostnames e o issuer; crie antes o Secret "alerta-secrets" (chaves em values.yaml).
+
+secrets:
+  existingSecret: alerta-secrets
+
+web:
+  replicas: 2
+api:
+  replicas: 2
+
+postgres:
+  storage: 5Gi
+
+gateway:
+  hostnames:
+    - alerta.exemplo.com.br
+  create: true
+  className: cilium
+  httpPort: 80
+  httpsPort: 443
+  tls:
+    enabled: true
+    secretName: alerta-tls
+    clusterIssuer: letsencrypt # ClusterIssuer do cert-manager (com suporte a Gateway API ligado)
+
+networkPolicy:
+  enabled: true
+  # No Cilium o Envoy do Gateway chega como identidade "ingress": não há namespace
+  # ou pod para selecionar. Sem gatewayFrom, quem abre web e api é a CiliumNetworkPolicy.
+  gatewayFrom: []
+  ciliumGateway: true

@@ -1,0 +1,154 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- $np := .Values.networkPolicy }}
+{{- $fullname := include "alerta.fullname" . }}
+# 1) Tudo deste release começa fechado (entrada e saída). As regras abaixo só abrem.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-default-deny
+  labels:
+    {{- include "alerta.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "alerta.selectorLabels" . | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+---
+# 2) DNS para todos (nomes dos Services e das APIs externas)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-dns
+  labels:
+    {{- include "alerta.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "alerta.selectorLabels" . | nindent 6 }}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        {{- required "networkPolicy.dns não pode ser vazio (lista vazia em 'to' liberaria tudo)" $np.dns | toYaml | nindent 8 }}
+      ports:
+        - { port: 53, protocol: UDP }
+        - { port: 53, protocol: TCP }
+---
+# 3) web: só recebe do Gateway
+# (atenção: "from" vazio numa NetworkPolicy libera QUALQUER origem; por isso o with)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-web
+  labels:
+    {{- include "alerta.componentLabels" (list . "web") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "alerta.componentSelector" (list . "web") | nindent 6 }}
+  policyTypes: [Ingress]
+  {{- with $np.gatewayFrom }}
+  ingress:
+    - from:
+        {{- toYaml . | nindent 8 }}
+      ports:
+        - { port: 8080, protocol: TCP }
+  {{- else }}
+  ingress: [] # sem gatewayFrom (ex.: Cilium Gateway): quem abre é a CiliumNetworkPolicy
+  {{- end }}
+---
+# 4) api: recebe do Gateway e do checker; fala com o Postgres
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-api
+  labels:
+    {{- include "alerta.componentLabels" (list . "api") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "alerta.componentSelector" (list . "api") | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    {{- with $np.gatewayFrom }}
+    - from:
+        {{- toYaml . | nindent 8 }}
+      ports:
+        - { port: 8080, protocol: TCP }
+    {{- end }}
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "alerta.componentSelector" (list . "checker") | nindent 14 }}
+      ports:
+        - { port: 8080, protocol: TCP }
+  egress:
+    {{- if .Values.postgres.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "alerta.componentSelector" (list . "postgres") | nindent 14 }}
+      ports:
+        - { port: 5432, protocol: TCP }
+    {{- else if $np.externalDatabaseCidr }}
+    - to:
+        - ipBlock:
+            cidr: {{ $np.externalDatabaseCidr }}
+      ports:
+        - { port: 5432, protocol: TCP }
+    {{- else }}
+    [] # banco externo sem networkPolicy.externalDatabaseCidr: a API não alcança o banco
+    {{- end }}
+{{- if .Values.checker.enabled }}
+---
+# 5) checker: não recebe nada; fala com a API e com a internet em 443 (cotações e push)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-checker
+  labels:
+    {{- include "alerta.componentLabels" (list . "checker") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "alerta.componentSelector" (list . "checker") | nindent 6 }}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "alerta.componentSelector" (list . "api") | nindent 14 }}
+      ports:
+        - { port: 8080, protocol: TCP }
+    - to:
+        - ipBlock:
+            cidr: {{ $np.checkerEgress.cidr }}
+            {{- with $np.checkerEgress.except }}
+            except:
+              {{- toYaml . | nindent 14 }}
+            {{- end }}
+      ports:
+        - { port: 443, protocol: TCP }
+{{- end }}
+{{- if .Values.postgres.enabled }}
+---
+# 6) postgres: só a API entra
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-postgres
+  labels:
+    {{- include "alerta.componentLabels" (list . "postgres") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "alerta.componentSelector" (list . "postgres") | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "alerta.componentSelector" (list . "api") | nindent 14 }}
+      ports:
+        - { port: 5432, protocol: TCP }
+{{- end }}
+{{- end }}

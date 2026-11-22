@@ -1,0 +1,53 @@
+{{- $fullname := include "alerta.fullname" . }}
+{{- $gw := .Values.gateway }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "alerta.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+    {{- if $gw.create }}
+    - name: {{ $fullname }}
+      sectionName: {{ ternary "https" "http" $gw.tls.enabled }}
+    {{- else }}
+    {{- required "gateway.parentRefs: informe o Gateway compartilhado (ou use gateway.create=true)" $gw.parentRefs | toYaml | nindent 4 }}
+    {{- end }}
+  hostnames:
+    {{- toYaml $gw.hostnames | nindent 4 }}
+  rules:
+    # O prefixo mais longo vence, independente da ordem: /api/... vai para a API.
+    # /internal não tem regra: só o checker, de dentro do cluster, fala com ele.
+    - matches:
+        - path: { type: PathPrefix, value: /api }
+      backendRefs:
+        - name: {{ $fullname }}-api
+          port: 8080
+    - matches:
+        - path: { type: PathPrefix, value: / }
+      backendRefs:
+        - name: {{ $fullname }}-web
+          port: 8080
+{{- if and $gw.create $gw.tls.enabled }}
+---
+# HTTP só redireciona para HTTPS
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ $fullname }}-redirect
+  labels:
+    {{- include "alerta.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+    - name: {{ $fullname }}
+      sectionName: http
+  hostnames:
+    {{- toYaml $gw.hostnames | nindent 4 }}
+  rules:
+    - filters:
+        - type: RequestRedirect
+          requestRedirect:
+            scheme: https
+            statusCode: 301
+{{- end }}

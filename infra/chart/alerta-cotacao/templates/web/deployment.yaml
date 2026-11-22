@@ -1,0 +1,52 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "alerta.fullname" . }}-web
+  labels:
+    {{- include "alerta.componentLabels" (list . "web") | nindent 4 }}
+spec:
+  replicas: {{ .Values.web.replicas }}
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      {{- include "alerta.componentSelector" (list . "web") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "alerta.componentLabels" (list . "web") | nindent 8 }}
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      automountServiceAccountToken: false
+      securityContext:
+        {{- include "alerta.podSecurity" 101 | nindent 8 }}
+      containers:
+        - name: web
+          image: {{ include "alerta.image" (list . .Values.web.image) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 20
+          lifecycle:
+            preStop:
+              exec:
+                # dá tempo do Gateway tirar o pod da rota antes do nginx parar
+                command: ["sleep", "5"]
+          resources:
+            {{- toYaml .Values.web.resources | nindent 12 }}
+          securityContext:
+            {{- include "alerta.containerSecurity" . | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp # pid e arquivos temporários do nginx-unprivileged
+      volumes:
+        - name: tmp
+          emptyDir: {}
