@@ -1,0 +1,5 @@
+# Scripts de shell com CRLF (checkout no Windows) quebram dentro dos contêineres Linux.
+* text=auto
+*.sh text eol=lf
+mvnw text eol=lf
+*.cmd text eol=crlf

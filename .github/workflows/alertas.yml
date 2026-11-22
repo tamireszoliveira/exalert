@@ -1,0 +1,84 @@
+name: Alertas de cotação
+
+# Fase 1: os avisos de verdade saem daqui (GitHub Actions agendado, modo arquivo).
+# Os alertas ficam em alertas/alerts.toml e o estado em alertas/state.json, que este
+# workflow commita. Quando o checker do cluster assumir, desligue com a variável de
+# repositório ALERTAS_VIA_ACTIONS=false (senão cada disparo chega duas vezes).
+
+on:
+  schedule:
+    # Seg a sex, das 09:02 às 18:52 de Brasília, a cada 10 min.
+    # O cron do GitHub é em UTC e Brasília é UTC-3 o ano todo: 12-21 UTC = 09-18 BRT.
+    # Mínimo aceito pelo GitHub: 5 min. Evite o minuto 0 (pico de carga, mais atraso).
+    - cron: "2,12,22,32,42,52 12-21 * * 1-5"
+  push: # editar os alertas dispara uma checagem na hora (e valida o arquivo)
+    branches: [main]
+    paths:
+      - alertas/alerts.toml
+      - services/checker/alerta_checker/**
+      - .github/workflows/alertas.yml
+  workflow_dispatch:
+    inputs:
+      teste:
+        description: Enviar push de teste com as cotações atuais
+        type: boolean
+        default: true
+
+permissions:
+  contents: write # o job grava o alertas/state.json no repositório
+
+concurrency:
+  group: alertas
+  cancel-in-progress: false
+
+jobs:
+  checar:
+    if: vars.ALERTAS_VIA_ACTIONS != 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Checar cotações
+        id: checar
+        env:
+          PYTHONPATH: services/checker
+          EVENTO: ${{ github.event_name }}
+          TESTE: ${{ inputs.teste }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          # Opcionais (secret não criado chega vazio e é ignorado):
+          NTFY_TOKEN: ${{ secrets.NTFY_TOKEN }}
+          BRAPI_TOKEN: ${{ secrets.BRAPI_TOKEN }}
+          AWESOMEAPI_TOKEN: ${{ secrets.AWESOMEAPI_TOKEN }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          args=(--config alertas/alerts.toml --state alertas/state.json)
+          # No agendamento, fonte fora do ar não derruba o run (vira push de aviso se durar);
+          # em push/manual o run falha na hora, para o erro aparecer.
+          if [ "$EVENTO" != "schedule" ]; then args+=(--strict); fi
+          if [ "$TESTE" = "true" ]; then args+=(--test-notify); fi
+          python3 -m alerta_checker.cron "${args[@]}"
+
+      - name: Gravar estado
+        if: always()
+        env:
+          RESUMO: ${{ steps.checar.outputs.resumo }}
+        run: |
+          if [ -z "$(git status --porcelain -- alertas/state.json)" ]; then
+            echo "Estado inalterado."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add alertas/state.json
+          # [skip ci]: commit de estado não roda CI nem release
+          git commit -q -m "estado: ${RESUMO:-atualização} [skip ci]"
+          for tentativa in 1 2 3; do
+            if git pull -q --rebase origin "$GITHUB_REF_NAME" && git push -q origin "HEAD:$GITHUB_REF_NAME"; then
+              exit 0
+            fi
+            sleep $((tentativa * 2))
+          done
+          echo "::error::não consegui gravar o alertas/state.json; a próxima execução pode repetir uma notificação"
+          exit 1

@@ -1,0 +1,21 @@
+# segredos locais
+.env
+
+# Python
+__pycache__/
+*.pyc
+.ruff_cache/
+
+# Java
+services/api/target/
+services/api/.mvn/wrapper/maven-wrapper.jar
+
+# Node
+node_modules/
+
+# editores e sistema
+.idea/
+.vscode/
+*.iml
+.DS_Store
+*.tmp

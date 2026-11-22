@@ -1,0 +1,205 @@
+name: CI
+
+# Monorepo: cada pasta só é testada quando muda. O job "ci-ok" no fim resume tudo
+# e é o único que precisa ser obrigatório na proteção da branch (job pulado conta como ok).
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    paths-ignore:
+      - alertas/state.json # commit de estado do agendamento: nada a testar
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read # o paths-filter lê os arquivos do PR pela API
+    outputs:
+      api: ${{ steps.filter.outputs.api }}
+      checker: ${{ steps.filter.outputs.checker }}
+      web: ${{ steps.filter.outputs.web }}
+      chart: ${{ steps.filter.outputs.chart }}
+      compose: ${{ steps.filter.outputs.compose }}
+      workflows: ${{ steps.filter.outputs.workflows }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v4
+        id: filter
+        with:
+          filters: |
+            api:
+              - services/api/**
+            checker:
+              - services/checker/**
+              - alertas/alerts.toml
+            web:
+              - apps/web/**
+            chart:
+              - infra/chart/**
+            compose:
+              - compose*.yaml
+              - .env.example
+              - infra/compose/**
+              - apps/web/**
+              - services/**
+            workflows:
+              - .github/workflows/**
+
+  api:
+    needs: changes
+    if: needs.changes.outputs.api == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: services/api
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: maven
+      - name: Testes (unitários e de integração com PostgreSQL no Testcontainers)
+        run: ./mvnw --batch-mode --no-transfer-progress verify
+      - name: Lint do Dockerfile
+        run: docker run --rm -i hadolint/hadolint < Dockerfile
+      - name: Imagem (só build)
+        uses: docker/build-push-action@v7
+        with:
+          context: services/api
+          push: false
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,mode=max,scope=api
+
+  checker:
+    needs: changes
+    if: needs.changes.outputs.checker == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        # 3.11 = mínimo suportado (tomllib); 3.15 = a da imagem
+        python: ["3.11", "3.15"]
+    defaults:
+      run:
+        working-directory: services/checker
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Lint
+        run: |
+          pipx run ruff check .
+          pipx run ruff format --check .
+      - name: Testes
+        run: python -m unittest discover -s tests -v
+      - name: Lint do Dockerfile
+        if: matrix.python == '3.15'
+        run: docker run --rm -i hadolint/hadolint < Dockerfile
+      - name: Imagem (só build)
+        if: matrix.python == '3.15'
+        uses: docker/build-push-action@v7
+        with:
+          context: services/checker
+          push: false
+          cache-from: type=gha,scope=checker
+          cache-to: type=gha,mode=max,scope=checker
+
+  web:
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+      - name: Testes (formatação e gráficos)
+        run: npm test
+      - name: Sintaxe dos módulos
+        run: for f in public/js/*.js public/sw.js; do node --check "$f"; done
+      - name: Lint do Dockerfile
+        run: docker run --rm -i hadolint/hadolint < Dockerfile
+      - name: Imagem (só build)
+        uses: docker/build-push-action@v7
+        with:
+          context: apps/web
+          push: false
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,mode=max,scope=web
+
+  chart:
+    needs: changes
+    if: needs.changes.outputs.chart == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: azure/setup-helm@v5
+        with:
+          version: v4.2.3
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.15"
+      - name: Lint com cada values
+        run: |
+          for values in "" values-local.yaml values-prod.yaml; do
+            helm lint infra/chart/alerta-cotacao --strict ${values:+-f infra/chart/alerta-cotacao/$values}
+          done
+      - name: Manifestos contra os schemas do Kubernetes e dos CRDs
+        run: |
+          pip install --quiet kubernetes-validate jsonschema pyyaml
+          python infra/chart/check.py
+
+  compose:
+    needs: changes
+    if: needs.changes.outputs.compose == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: Arquivos do compose
+        run: |
+          docker compose --env-file .env.example config --quiet
+          docker compose --env-file .env.example -f compose.yaml -f compose.mercado-falso.yaml config --quiet
+
+  workflows:
+    needs: changes
+    if: needs.changes.outputs.workflows == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: actionlint (com shellcheck nos blocos run)
+        run: |
+          bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+          ./actionlint -color
+
+  ci-ok:
+    if: always()
+    needs: [changes, api, checker, web, chart, compose, workflows]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Todos os jobs passaram (ou foram pulados)
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          echo "$RESULTS" | jq -e 'all(.[]; .result == "success" or .result == "skipped")' > /dev/null
