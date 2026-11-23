@@ -7,7 +7,7 @@
   },
   "falhas": {
     "USD-BRL": {
-      "avisado": false,
+      "avisado": true,
       "desde": "2026-11-22T00:55:00-03:00"
     }
   }
